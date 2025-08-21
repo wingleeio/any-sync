@@ -2,6 +2,7 @@
     "name": "any-sync",
     "version": "0.0.1",
     "description": "",
+    "type": "module",
     "main": "./dist/index.js",
     "scripts": {
         "build": "zshy",
@@ -20,6 +21,7 @@
     "packageManager": "pnpm@10.13.1",
     "devDependencies": {
         "effect": "^3.17.8",
+        "vitest": "^3.2.4",
         "zshy": "^0.3.5"
     },
     "peerDependencies": {
@@ -36,5 +38,8 @@
             "import": "./dist/index.mjs",
             "require": "./dist/index.js"
         }
+    },
+    "dependencies": {
+        "nanoid": "^5.1.5"
     }
 }

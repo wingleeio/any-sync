@@ -1,78 +1,56 @@
-import { Effect, Queue, Schema, Context, Layer, ManagedRuntime } from 'effect';
+export * as Server from './server.js';
+export * as Client from './client.js';
+import { Server } from './server.js';
+import { Client } from './client.js';
+import { Schema } from 'effect';
 
-type Events = Record<string, Schema.Schema<any>>;
-
-const schemaFromEvents = (events: Events) => {
-    return Schema.Union(
-        ...Object.keys(events).map(key =>
-            Schema.Struct({
-                name: Schema.Literal(key),
-                payload: events[key],
-            })
-        )
-    );
+const serverState = {
+    state: 0,
 };
 
-type ServerMaterializers<TEvents extends Events> = {
-    [K in keyof TEvents]: (event: TEvents[K]) => void;
+const events = {
+    add: Schema.Number,
+    sub: Schema.Number,
 };
 
-type ServerOptions<TEvents extends Events, TMaterializers extends ServerMaterializers<TEvents>> = {
-    events: TEvents;
-    materializers: TMaterializers;
+const server = new Server({
+    sequence: 0,
+    events,
+    materializers: {
+        add: event => (serverState.state += event.payload),
+        sub: event => {
+            if (serverState.state === 0 || serverState.state - event.payload < 0) {
+                throw new Error('Subtraction is not allowed');
+            }
+
+            return (serverState.state -= event.payload);
+        },
+    },
+    onCommited: async event => {
+        console.log('Server: onCommited', event);
+        client.receive(event);
+    },
+});
+
+const clientState = {
+    state: 0,
 };
 
-type ServerRuntimeIn<
-    TEvents extends Events,
-    TMaterializers extends ServerMaterializers<TEvents>
-> = {
-    queue: Queue.Queue<TEvents>;
-    schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
-    materializers: TMaterializers;
-};
-
-type ServerRuntimeOut<
-    TEvents extends Events,
-    TMaterializers extends ServerMaterializers<TEvents>
-> = {
-    queue: Queue.Queue<TEvents>;
-    schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
-    materializers: TMaterializers;
-};
-
-type ServerRuntime<
-    TEvents extends Events,
-    TMaterializers extends ServerMaterializers<TEvents>
-> = ManagedRuntime.ManagedRuntime<
-    ServerRuntimeIn<TEvents, TMaterializers>,
-    ServerRuntimeOut<TEvents, TMaterializers>
->;
-
-const ServerContext = <
-    TEvents extends Events,
-    TMaterializers extends ServerMaterializers<TEvents>
->() => {
-    return Context.GenericTag<{
-        queue: Queue.Queue<TEvents>;
-        schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
-        materializers: TMaterializers;
-    }>(`ServerContext`);
-};
-
-class Server<TEvents extends Events, TMaterializers extends ServerMaterializers<TEvents>> {
-    private readonly runtime: ServerRuntime<TEvents, TMaterializers>;
-    private readonly context = ServerContext<TEvents, TMaterializers>();
-
-    constructor(options: ServerOptions<TEvents, TMaterializers>) {
-        const layer = Layer.scoped(
-            this.context,
-            Effect.Do.pipe(
-                Effect.bind('queue', () => Queue.bounded<TEvents>(1)),
-                Effect.let('schema', () => schemaFromEvents(options.events)),
-                Effect.let('materializers', () => options.materializers)
-            )
-        );
-
-        this.runtime = ManagedRuntime.make(layer);
-    }
-}
+const client = new Client({
+    events,
+    sequence: 0,
+    materializers: {
+        add: {
+            apply: event => (clientState.state += event.payload),
+            rollback: event => (clientState.state -= event.payload),
+        },
+        sub: {
+            apply: event => (clientState.state -= event.payload),
+            rollback: event => (clientState.state += event.payload),
+        },
+    },
+    onCommit: async event => {
+        server.commit(event);
+        console.log('ClientState', clientState);
+    },
+});
