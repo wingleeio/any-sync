@@ -6,7 +6,8 @@
     "main": "./dist/index.js",
     "scripts": {
         "build": "zshy",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "test": "vitest run",
+        "test:watch": "vitest"
     },
     "zshy": {
         "main": "./src/index.ts",
