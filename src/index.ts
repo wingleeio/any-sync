@@ -27,7 +27,6 @@ const server = new Server({
         },
     },
     onCommited: async event => {
-        console.log('Server: onCommited', event);
         client.receive(event);
     },
 });
@@ -54,3 +53,27 @@ const client = new Client({
         console.log('ClientState', clientState);
     },
 });
+
+client.commit({
+    name: 'sub',
+    payload: 1,
+});
+
+client.commit({
+    name: 'sub',
+    payload: 1,
+});
+
+client.commit({
+    name: 'sub',
+    payload: 1,
+});
+
+client.commit({
+    name: 'sub',
+    payload: 1,
+});
+
+setTimeout(() => {
+    console.log('ClientState After', clientState);
+}, 1000);

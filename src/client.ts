@@ -19,7 +19,6 @@ export type ClientContext<
 > = {
     pending: Ref.Ref<ClientPendingEvents<TEvents>>;
     sequence: Ref.Ref<number>;
-    status: Ref.Ref<'idle' | 'processing'>;
     queue: Queue.Queue<CommitEvent<keyof TEvents, TEvents[keyof TEvents]>>;
     schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
     materializers: TMaterializers;
@@ -32,7 +31,6 @@ export const ClientContext = <
     return Context.GenericTag<{
         pending: Ref.Ref<ClientPendingEvents<TEvents>>;
         sequence: Ref.Ref<number>;
-        status: Ref.Ref<'idle' | 'processing'>;
         queue: Queue.Queue<CommitEvent<keyof TEvents, TEvents[keyof TEvents]>>;
         schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
         materializers: TMaterializers;
@@ -72,7 +70,6 @@ export class Client<TEvents extends Events, TMaterializers extends ClientMateria
             Effect.Do.pipe(
                 Effect.bind('pending', () => Ref.make<ClientPendingEvents<TEvents>>({})),
                 Effect.bind('sequence', () => Ref.make(options.sequence)),
-                Effect.bind('status', () => Ref.make<'idle' | 'processing'>('idle')),
                 Effect.bind('queue', () =>
                     Queue.unbounded<CommitEvent<keyof TEvents, TEvents[keyof TEvents]>>()
                 ),
@@ -82,44 +79,32 @@ export class Client<TEvents extends Events, TMaterializers extends ClientMateria
         );
 
         this.runtime = ManagedRuntime.make(layer);
-
         this.onCommit = options.onCommit;
+        this.runtime.runSync(Effect.forkDaemon(this.process()));
     }
 
     public commit<K extends keyof TEvents>(event: CommitEvent<K, TEvents[K]>) {
         const self = this;
-        return this.runtime.runPromise(
+        return this.runtime.runSync(
             Effect.gen(function* () {
                 const ctx = yield* self.context;
                 const validatedEvent = yield* Schema.decode(ctx.schema)(event);
 
                 yield* Queue.offer(ctx.queue, validatedEvent);
-
-                const status = yield* Ref.get(ctx.status);
-
-                if (status === 'processing') {
-                    return;
-                }
-
-                yield* Ref.set(ctx.status, 'processing');
-                yield* Effect.forkDaemon(self.process());
             })
         );
     }
 
     public receive<K extends keyof TEvents>(event: CommittedEvent<K, TEvents[K]>) {
         const self = this;
-        return this.runtime.runPromise(
+        return this.runtime.runSync(
             Effect.gen(function* () {
                 const ctx = yield* self.context;
                 const pending = yield* Ref.get(ctx.pending);
 
                 if (event.clientId && pending[event.clientId]) {
                     if (event.error) {
-                        const materializer = ctx.materializers[event.name].rollback;
-
-                        yield* Effect.tryPromise(() => Promise.resolve(materializer(event as any)));
-
+                        yield* Queue.offer(ctx.queue, event);
                         yield* Ref.update(ctx.pending, ({ [event.clientId!]: _, ...rest }) => rest);
                     }
 
@@ -130,10 +115,9 @@ export class Client<TEvents extends Events, TMaterializers extends ClientMateria
                 if (event.error) {
                     return;
                 }
+                const validatedEvent = yield* Schema.decode(ctx.schema)(event);
 
-                const materializer = ctx.materializers[event.name].apply;
-
-                yield* Effect.tryPromise(() => Promise.resolve(materializer(event as any)));
+                yield* Queue.offer(ctx.queue, validatedEvent);
             })
         );
     }
@@ -145,7 +129,9 @@ export class Client<TEvents extends Events, TMaterializers extends ClientMateria
             const event = yield* Queue.take(ctx.queue);
             const clientId = nanoid();
 
-            const materializer = ctx.materializers[event.name].apply;
+            const materializer = event.error
+                ? ctx.materializers[event.name].rollback
+                : ctx.materializers[event.name].apply;
 
             const clientEvent = {
                 ...event,
@@ -153,6 +139,10 @@ export class Client<TEvents extends Events, TMaterializers extends ClientMateria
             };
 
             yield* Effect.tryPromise(() => Promise.resolve(materializer(clientEvent as any)));
+
+            if (event.error) {
+                return;
+            }
 
             yield* Ref.update(ctx.pending, pending => ({
                 ...pending,

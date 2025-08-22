@@ -10,7 +10,6 @@ export type ServerContext<
     TMaterializers extends ServerMaterializers<TEvents>
 > = {
     sequence: Ref.Ref<number>;
-    status: Ref.Ref<'idle' | 'processing'>;
     queue: Queue.Queue<CommitEvent<keyof TEvents, TEvents[keyof TEvents]>>;
     schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
     materializers: TMaterializers;
@@ -30,7 +29,6 @@ export const ServerContext = <
 >() => {
     return Context.GenericTag<{
         sequence: Ref.Ref<number>;
-        status: Ref.Ref<'idle' | 'processing'>;
         queue: Queue.Queue<CommitEvent<keyof TEvents, TEvents[keyof TEvents]>>;
         schema: Schema.Schema<{ readonly name: string; readonly payload: any }>;
         materializers: TMaterializers;
@@ -64,7 +62,6 @@ export class Server<TEvents extends Events, TMaterializers extends ServerMateria
                     Queue.unbounded<CommitEvent<keyof TEvents, TEvents[keyof TEvents]>>()
                 ),
                 Effect.bind('sequence', () => Ref.make(options.sequence)),
-                Effect.bind('status', () => Ref.make<'idle' | 'processing'>('idle')),
                 Effect.let('schema', () => schemaFromEvents(options.events)),
                 Effect.let('materializers', () => options.materializers)
             )
@@ -72,25 +69,17 @@ export class Server<TEvents extends Events, TMaterializers extends ServerMateria
 
         this.runtime = ManagedRuntime.make(layer);
         this.onCommited = options.onCommited;
+        this.runtime.runSync(Effect.forkDaemon(this.process()));
     }
 
     public commit<K extends keyof TEvents>(event: CommitEvent<K, TEvents[K]>) {
         const self = this;
-        return this.runtime.runPromise(
+        return this.runtime.runSync(
             Effect.gen(function* () {
                 const ctx = yield* self.context;
                 const validatedEvent = yield* Schema.decode(ctx.schema)(event);
 
                 yield* Queue.offer(ctx.queue, validatedEvent);
-
-                const status = yield* Ref.get(ctx.status);
-
-                if (status === 'processing') {
-                    return;
-                }
-
-                yield* Ref.set(ctx.status, 'processing');
-                yield* Effect.forkDaemon(self.process());
             })
         );
     }
@@ -122,7 +111,8 @@ export class Server<TEvents extends Events, TMaterializers extends ServerMateria
         });
 
         return drain.pipe(
-            Effect.catchAll(e => Effect.logWarning('Server: Error processing event', e)),
+            // Effect.tapError(e => Effect.logWarning('Server: Error processing event', e)),
+            Effect.catchAll(e => Effect.succeed(null)),
             Effect.repeat(Schedule.forever)
         );
     }

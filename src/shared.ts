@@ -9,6 +9,7 @@ export type CommitEvent<TName extends string | number | symbol, TPayloadSchema> 
     name: string & TName;
     payload: Schema.Schema.Type<TPayloadSchema>;
     clientId?: string;
+    error?: boolean;
 };
 
 export type CommittedEvent<TName extends string | number | symbol, TPayloadSchema> = {
